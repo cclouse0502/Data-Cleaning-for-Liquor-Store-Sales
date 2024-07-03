@@ -1,0 +1,110 @@
+-- Data Cleaning
+
+Select *
+From may2024;
+
+-- 1. Remove Duplicates
+-- 2. Standardize the Data
+-- 3. Null/Blank Values
+-- 4. Remove Unnecessary Columns
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- Creating staging table to not alter raw data
+
+Create Table may2024_staging
+Like may2024;
+
+Insert Into may2024_staging
+Select *
+From may2024;
+
+Select *
+From may2024_staging;
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- Checking for Duplicates
+
+With duplicate_cte as
+(
+	Select *,
+		row_number() Over(partition by UPC) as row_num
+	From may2024_staging
+)
+Select *
+From duplicate_cte
+Where row_num > 1;
+
+-- no duplicates exist
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- Standardizing Data
+
+Select Distinct Department
+From may2024_staging;
+
+-- Removing "- SI"  from department names to combine with like department names (i.e. "BEER - SI" to "BEER")
+
+Update may2024_staging
+Set department = 'CHAMPAGNE'
+Where department Like 'CHAMPAGNE%';
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- Some products have incorrect margins (i.e. UPC '08066095711' has a Margin of 95.5%), if possible we will correct the cost and margins
+Select *
+From may2024_staging
+Where Department != 'CIGARETTE' -- cigarettes have higher margins than other products
+Order By Margin DESC;
+
+-- 627 products came back with margins < 0, meaning pack amounts were inserted incorrectly
+-- The following CTE retrieves the true cost, profit and margin of products that are not entered correctly
+-- The union allows you to add the Beer and Cigarette categories that are entered correctly
+-- Departments are grouped to determine which is the most profitable
+
+With margin_cte as
+(
+Select *, (cost*pack*qtySold) as true_cost, ((Retail-(cost*pack))*qtySold) as true_profit, Round((((retail-(cost*pack*qtySold))/retail)*100),2) as true_margin
+From may2023_staging
+Where Department != 'CIGARETTE'
+AND Department != 'Beer' -- Beer is entered by case rather than by pack in system
+)
+Select department, round(sum(pack*cost),2) as total_cost, round(sum(profit),2) as total_profit, round((sum(cost*pack)+sum(profit)),2) as total_revenue, round(avg(margin),2) as avg_margin
+From may2023_staging
+Where Department = 'BEER'
+Group By Department
+	Union
+		Select department, round(sum(qtySold*cost),2) as total_cost, round(sum(profit),2) as total_profit, round((sum(cost*qtySold)+sum(profit)),2) as total_revenue, round(avg(margin),2) as avg_margin
+		From may2023_staging
+		Where Department = 'Cigarette'
+		Group By Department
+	Union
+		Select Distinct department, round(sum(true_cost),2) as total_cost, round(sum(true_profit),2) as total_profit, round((sum(true_cost)+sum(true_profit)),2) as total_revenue, round(avg(true_margin),2) as avg_margin
+		From margin_cte
+		Where margin_cte.true_margin > 1
+		Group By department
+		Order by total_profit DESC;
+
+
+
+-- Used to alter pack counts to correct value
+Update may2024_staging
+Set pack = 1
+Where upc = '81011713032';
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
